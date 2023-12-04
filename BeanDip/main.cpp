@@ -4,10 +4,11 @@
 #include "common.h"
 #include "get.h"
 #include "put.h"
+#include "dir.h"
 
 // TODO: Set buf size?
-// TODO: Get function pointers during init
-
+// TODO: Get function pointers during init?
+// TODO: make msgheader const in command functions?
 int main()
 {
 	int iResult = 0;
@@ -34,6 +35,9 @@ int main()
 			DERR("recv", GetLastError());
 			return dwRecvd;
 		}
+
+		printf("Type: %d\n", msgHeader.Type);
+		printf("Len: %d\n", msgHeader.Len);
 		
 		switch (msgHeader.Type)
 		{
@@ -50,7 +54,7 @@ int main()
 			break;
 
 		case DIR:
-
+			my_dir(sock, &msgHeader);
 			break;
 
 		default:

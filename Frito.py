@@ -2,28 +2,27 @@ import socket
 import struct
 import os
 
-def main():
-    CONN = ("localhost", 6969)
-    sock = socket.socket()
-    sock.bind(CONN)
-    sock.listen(5)
-    conn, addr = sock.accept()
+def get(sock):
+    file = br"C:\Users\uttervitriol\source\repos\GameHacking\DLL_Injector\DLL_Injector\Injector\bin\x64\Release\net6.0-windows\Injector.exe"
+    buf = b""
+    buf += struct.pack("<h", 1)
+    buf += struct.pack("<l", len(file))
+    buf += file
+    sock.send(buf)
+    revd = 0
+    with open(r"C:\Users\uttervitriol\source\repos\BeanDip\yeet.exe", "wb") as f:
+        while(revd != 149504):
+            revd += f.write(sock.recv(4096))
+            print(revd)
 
-    # file = br"C:\Users\uttervitriol\source\repos\GameHacking\DLL_Injector\DLL_Injector\Injector\bin\x64\Release\net6.0-windows\Injector.exe"
+def put(sock):
     file = br"C:\Users\uttervitriol\source\repos\BeanDip\yeet.exe"
-
     print(f"File: {file}:{len(file)}")
     buf = b""
     buf += struct.pack("<h", 1)
     buf += struct.pack("<l", len(file))
     buf += file
-    conn.send(buf)
-
-    # revd = 0
-    # with open(r"C:\Users\uttervitriol\source\repos\BeanDip\yeet.exe", "wb") as f:
-    #     while(revd != 149504):
-    #         revd += f.write(conn.recv(4096))
-    #         print(revd)
+    sock.send(buf)
 
     sent = 0
     sz = os.path.getsize(r"C:\Users\uttervitriol\source\repos\GameHacking\DLL_Injector\DLL_Injector\Injector\bin\x64\Release\net6.0-windows\Injector.exe")
@@ -31,7 +30,7 @@ def main():
     buf = b""
     buf += struct.pack("<h", 1)
     buf += struct.pack("<l", sz)
-    conn.send(buf)
+    sock.send(buf)
 
     with open(r"C:\Users\uttervitriol\source\repos\GameHacking\DLL_Injector\DLL_Injector\Injector\bin\x64\Release\net6.0-windows\Injector.exe", "rb") as f:
         while(sent != sz):
@@ -40,8 +39,25 @@ def main():
             buf += struct.pack("<h", 1)
             buf += struct.pack("<l", len(read))
             buf += read
-            conn.send(buf)
+            sock.send(buf)
             sent +=  len(read)
+
+def main():
+    CONN = ("localhost", 6969)
+    sock = socket.socket()
+    sock.bind(CONN)
+    sock.listen(5)
+    conn, addr = sock.accept()
+
+    file = br"C:\Users\uttervitriol\source\repos\BeanDip\*"
+
+    print(f"File: {file}:{len(file)}")
+    buf = b""
+    buf += struct.pack("<h", 3)
+    buf += struct.pack("<l", len(file))
+    buf += file
+    conn.send(buf)
+
 
 
 
