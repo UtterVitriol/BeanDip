@@ -19,9 +19,10 @@ typedef BOOL (*tAcceptEx)(SOCKET       sListenSocket,
                           DWORD        dwReceiveDataLength,
                           DWORD        dwLocalAddressLength,
                           DWORD        dwRemoteAddressLength,
-                          LPDWORD     lpdwBytesReceived,
+                          LPDWORD      lpdwBytesReceived,
                           LPOVERLAPPED lpOverlapped);
 
-SOCKET init_sock(USHORT port);
-void get_client();
-VOID   cleanup_sock(SOCKET sock);
+
+SOCKET init_server(USHORT port);
+VOID   server_run(SOCKET sServer);
+VOID   cleanup_server(SOCKET sock);

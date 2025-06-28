@@ -1,55 +1,12 @@
-
 #include "socket.h"
 #include "common.h"
+#include "client.h"
+#include "thread.h"
 
-void
-handle_client (SOCKET sock, HANDLE ioPort)
-{
-    WSAOVERLAPPED wsaOverlapped    = { 0 };
-    WSABUF        wsaBuf           = { 0 };
-    wsaBuf.buf                     = HeapAlloc(GetProcessHeap(), 0, 1024);
-    wsaBuf.len                     = 1024;
-    wsaOverlapped.hEvent           = WSACreateEvent();
-    int             iResult        = 0;
-    DWORD           dwFlags        = 0;
-    DWORD           dwBytes        = 0;
-    ULONG_PTR       key            = 0;
-    LPWSAOVERLAPPED pWsaOverlapped = NULL;
-
-    iResult = WSARecv(sock, &wsaBuf, 1, NULL, &dwFlags, &wsaOverlapped, NULL);
-    if (0 != iResult && WSA_IO_PENDING != WSAGetLastError())
-    {
-        printf("%d: %d\n", WSAGetLastError(), iResult);
-        // goto END;
-    }
-
-    printf("Got connection, waiting on data\n");
-    if (!GetQueuedCompletionStatus(
-            ioPort, &dwBytes, &key, &pWsaOverlapped, INFINITE))
-    {
-        DERR("GetQueuedCompletionStatus");
-        goto END;
-    }
-    printf("Recv'd: %lu\n", dwBytes);
-    printf("%s\n", wsaBuf.buf);
-
-    // while (1)
-    // {
-    //     if (WAIT_OBJECT_0 == WaitForSingleObject(wsaOverlapped.hEvent, 0))
-    //     {
-    //         printf("%s\n", wsaBuf.buf);
-    //         break;
-    //     }
-    //     printf("Waiting\n");
-    // }
-
-END:
-    HeapFree(GetProcessHeap(), 0, wsaBuf.buf);
-    closesocket(sock);
-}
+LPFN_ACCEPTEX pAcceptEx = NULL;
 
 SOCKET
-init_sock(USHORT port)
+init_server(USHORT port)
 {
     int     iResult = 0;
     WSADATA wsaData = { 0 };
@@ -89,29 +46,87 @@ init_sock(USHORT port)
 
     goto EXIT;
 ERR:
-    cleanup_sock(sock);
+    cleanup_server(sock);
+    sock = INVALID_SOCKET;
 EXIT:
     return sock;
 }
 
-void
-get_client ()
+PCLIENT_CTX
+queue_accept(SOCKET sServer,
+             HANDLE hCompPort)
 {
-    SOCKET sock   = INVALID_SOCKET;
-    SOCKET client = INVALID_SOCKET;
+    PCLIENT_CTX  client         = NULL;
+    BOOL         bResult        = FALSE;
+    LPOVERLAPPED pWsaOverlapped = NULL;
 
-    HANDLE       hCompPort    = INVALID_HANDLE_VALUE;
-    DWORD        dwBytes      = 0;
-    ULONG_PTR    key          = 0;
-    LPOVERLAPPED lpOverlapped = NULL;
-    // tAcceptEx     pAcceptEx     = NULL;
-    LPFN_ACCEPTEX pAcceptEx     = NULL;
-    GUID          GuidAcceptEx  = WSAID_ACCEPTEX;
-    int           iResult       = 0;
-    CHAR          buff[1024]    = { 0 };
-    CONST DWORD   dwAddrLen     = ((sizeof(SOCKADDR_IN) + 16));
-    WSAOVERLAPPED wsaOverlapped = { 0 };
-    BOOL          bResult       = FALSE;
+    client = create_client(hCompPort);
+    if (!client)
+    {
+        goto END;
+    }
+
+    pWsaOverlapped = HeapAlloc(
+        GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*pWsaOverlapped));
+    if (!pWsaOverlapped)
+    {
+        close_client(&client);
+        goto END;
+    }
+
+    pWsaOverlapped->hEvent = WSACreateEvent();
+
+    bResult = pAcceptEx(sServer,
+                        client->sock,
+                        client->buff,
+                        0,
+                        dwAddrLen,
+                        dwAddrLen,
+                        &client->dwBytes,
+                        pWsaOverlapped);
+    if (!bResult && ERROR_IO_PENDING != WSAGetLastError())
+    {
+        DERR("AcceptEx");
+        close_client(&client);
+        goto END;
+    }
+
+    // Add pCTX->sock socket to completion port
+    CreateIoCompletionPort(
+        (HANDLE)client->sock, hCompPort, (DWORD)client->sock, 0);
+    if (!hCompPort)
+    {
+        DERR("CreateIoCompletionPort");
+        close_client(&client);
+        goto END;
+    }
+
+END:
+    return client;
+}
+
+VOID
+server_run (SOCKET sServer)
+{
+    PTP_POOL            pool                        = NULL;
+    PTP_CLEANUP_GROUP   cleanupGroup                = NULL;
+    TP_CALLBACK_ENVIRON callbackEnviron             = { 0 };
+    PTP_WORK            work                        = NULL;
+    HANDLE              hCompPort                   = INVALID_HANDLE_VALUE;
+    DWORD               dwBytes                     = 0;
+    ULONG_PTR           key                         = 0;
+    LPOVERLAPPED        lpOverlapped                = NULL;
+    GUID                GuidAcceptEx                = WSAID_ACCEPTEX;
+    int                 iResult                     = 0;
+    BOOL                bResult                     = FALSE;
+    PCLIENT_CTX         client                      = NULL;
+
+    /////////////
+    /// Move this shit
+    if (!threadpool_init(&pool, &cleanupGroup, &callbackEnviron))
+    {
+        goto END;
+    }
 
     // Create completion port
     hCompPort = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
@@ -121,22 +136,15 @@ get_client ()
         goto END;
     }
 
-    // Create server socket
-    sock = init_sock(23669);
-    if (INVALID_SOCKET == sock)
-    {
-        goto END;
-    }
-
-    hCompPort = CreateIoCompletionPort((HANDLE)sock, hCompPort, 0, 0);
+    hCompPort = CreateIoCompletionPort((HANDLE)sServer, hCompPort, sServer, 0);
     if (!hCompPort)
     {
         DERR("CreateIoCompletionPort");
         goto END;
     }
 
-    // Get pointer to AcceptEx
-    iResult = WSAIoctl(sock,
+    // Get pointer to AccectpEx
+    iResult = WSAIoctl(sServer,
                        SIO_GET_EXTENSION_FUNCTION_POINTER,
                        &GuidAcceptEx,
                        sizeof(GuidAcceptEx),
@@ -150,54 +158,79 @@ get_client ()
         DERR("WSAIoctl");
         goto END;
     }
-
-    client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (INVALID_SOCKET == client)
+    /// End move
+    //////////////////////
+    client = queue_accept(sServer, hCompPort);
+    if (!client)
     {
-        DERR("Socket");
         goto END;
     }
-
-    bResult = pAcceptEx(sock,
-                        client,
-                        buff,
-                        0,
-                        dwAddrLen,
-                        dwAddrLen,
-                        &dwBytes,
-                        &wsaOverlapped);
-    if (!bResult && ERROR_IO_PENDING != WSAGetLastError())
+    for (;;)
     {
-        DERR("AcceptEx");
-        goto END;
-    }
+        if (!GetQueuedCompletionStatus(
+                hCompPort, &dwBytes, &key, &lpOverlapped, INFINITE))
+        {
+            DERR("GetQueuedCompletionStatus");
+            goto END;
+        }
 
-    // Add server socket to completion port
-    hCompPort
-        = CreateIoCompletionPort((HANDLE)client, hCompPort, (DWORD)client, 0);
-    if (!hCompPort)
-    {
-        DERR("CreateIoCompletionPort");
-        goto END;
+        if (key == sServer)
+        {
+            WSACloseEvent(lpOverlapped->hEvent);
+            HeapFree(GetProcessHeap(), 0, lpOverlapped);
+            iResult = WSARecv(client->sock,
+                              &client->wsaBuf,
+                              1,
+                              NULL,
+                              &client->dwFlags,
+                              &client->wsaOverlapped,
+                              NULL);
+            if (0 != iResult && WSA_IO_PENDING != WSAGetLastError())
+            {
+                DERR("WSARecv");
+                goto END;
+            }
+            DMSG("Queued Recv");
+            client = queue_accept(sServer, hCompPort);
+            if (!client)
+            {
+                goto END;
+            }
+        }
+        else if (dwBytes == 0)
+        {
+            client = (PCLIENT_CTX)lpOverlapped;
+            DMSG("Client connection closed\n");
+            close_client(&client);
+            goto END;
+        }
+        else
+        {
+            work = CreateThreadpoolWork(
+                handle_client, (PCLIENT_CTX)lpOverlapped, &callbackEnviron);
+            if (!work)
+            {
+                DERR("CreateThreadpoolWork");
+                goto END;
+            }
+            SubmitThreadpoolWork(work);
+        }
     }
-
-    if (!GetQueuedCompletionStatus(
-            hCompPort, &dwBytes, &key, &lpOverlapped, INFINITE))
-    {
-        DERR("GetQueuedCompletionStatus");
-        goto END;
-    }
-
-    handle_client(client, hCompPort);
 
 END:
-    closesocket(client);
-    cleanup_sock(sock);
+    DMSG("Cleaning up");
+    if(client)
+    {
+        close_client(&client);
+    }
+    CloseHandle(hCompPort);
+    cleanup_server(sServer);
+    DMSG("Cleaned up");
     return;
 }
 
 VOID
-cleanup_sock (SOCKET sock)
+cleanup_server (SOCKET sock)
 {
     closesocket(sock);
     WSACleanup();
